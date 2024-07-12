@@ -258,6 +258,28 @@ class XPUFcFuser : public FuseBase {
           }
       }
 
+      if ((op_info->HasAttr("enable_int8") &&
+             op_info->GetAttr<bool>("enable_int8"))) {
+          // LOG(WARNING) << "enable_int8 is true, GYYDEBUG";
+          auto max_Y0_vector = op_info->GetAttr<std::vector<float>>("Y0_scale");
+          CHECK_EQ(max_Y0_vector.size(), mean_len)
+              << "Weight max_scale size must equal batch_norm sacle/mean "
+                 "size.";
+          for (int i = 0; i < mean_len; i++) {
+            max_Y0_vector[i] *= fabs(scale_on_host[i]);
+          }
+          matched.at("mul")->stmt()->mutable_op_info()->SetAttr<std::vector<float>>("Y0_scale", max_Y0_vector);
+
+          int8_t* filter_on_host = filter_t->mutable_data<int8_t>();
+          for (int i = 0; i < mean_len; i++) {
+            if (scale_on_host[i] < 0) {
+              for (int j = 0; j < filter_row_num; ++j) {
+                filter_on_host[i + mean_len * j] *= -1;
+              }
+            }
+          }
+      }
+
       op_desc.SetInput("Filter", {filter_name});
         
     } else {

@@ -168,7 +168,6 @@ class XPUFcFuser : public FuseBase {
     // op_desc.SetInput("Filter", {matched.at("W")->arg()->name});
     auto* op_info = matched.at("mul")->stmt()->op_info();
 
-
     auto filter_name = matched.at("W")->arg()->name;
     std::string fusion_bias_name = filter_name + "_fc_fusion_bias";
     auto* fusion_bias_node = graph->NewArgumentNode(fusion_bias_name);
@@ -184,7 +183,7 @@ class XPUFcFuser : public FuseBase {
       float* fusion_bias_ptr = fusion_bias_t->mutable_data<float>();
 
       auto ew_dim = f_dims[1];
-     
+
       if (with_bias_) {
         auto ew_bias_add_y_name = matched.at("bias")->arg()->name;
         auto* ew_bias_add_y_t = scope->FindMutableTensor(ew_bias_add_y_name);
@@ -192,23 +191,21 @@ class XPUFcFuser : public FuseBase {
         auto ew_bias_add_y_size = ew_bias_add_y_t->numel();
 
         if (ew_bias_add_y_size != ew_dim) {
-          LOG(WARNING)
-              << "Elements size of `elemwise_bias` and 'mul y dim1` "
-                 "should be the same, but get size of `elemwise_bias` "
-                 "is: "
-              << ew_bias_add_y_size
-              << ", size of `mul y dim1` is: " << ew_dim;
+          LOG(WARNING) << "Elements size of `elemwise_bias` and 'mul y dim1` "
+                          "should be the same, but get size of `elemwise_bias` "
+                          "is: "
+                       << ew_bias_add_y_size
+                       << ", size of `mul y dim1` is: " << ew_dim;
           return;
         }
 
         for (int i = 0; i < ew_bias_add_y_size; ++i) {
-            fusion_bias_ptr[i] = ew_bias_add_y_on_host[i];
+          fusion_bias_ptr[i] = ew_bias_add_y_on_host[i];
         }
       } else {
         for (int i = 0; i < ew_dim; ++i) {
-            fusion_bias_ptr[i] = 0.0f;
+          fusion_bias_ptr[i] = 0.0f;
         }
-      
       }
 
       auto scale_name = matched.at("bn_scale")->arg()->name;
@@ -237,58 +234,60 @@ class XPUFcFuser : public FuseBase {
       }
 
       for (int i = 0; i < mean_len; ++i) {
-          scale_on_host[i] = scale_on_host[i] / sqrtf(var_on_host[i] + epsilon);
+        scale_on_host[i] = scale_on_host[i] / sqrtf(var_on_host[i] + epsilon);
       }
 
       for (int i = 0; i < mean_len; ++i) {
         bias_on_host[i] +=
-          (fusion_bias_ptr[i] - mean_on_host[i]) * scale_on_host[i];
+            (fusion_bias_ptr[i] - mean_on_host[i]) * scale_on_host[i];
       }
       memcpy(fusion_bias_ptr, bias_on_host, mean_len * sizeof(float));
       fusion_bias_t->set_persistable(true);
       op_desc.SetInput("Bias", {fusion_bias_name});
 
       if (!(op_info->HasAttr("enable_int8") &&
-              op_info->GetAttr<bool>("enable_int8"))) {
-          float* filter_on_host = filter_t->mutable_data<float>();
-          for (int i = 0; i < mean_len; ++i) {
-            for (int j = 0; j < filter_row_num; ++j) {
-              filter_on_host[i + mean_len * j] *= scale_on_host[i];
-            }
+            op_info->GetAttr<bool>("enable_int8"))) {
+        float* filter_on_host = filter_t->mutable_data<float>();
+        for (int i = 0; i < mean_len; ++i) {
+          for (int j = 0; j < filter_row_num; ++j) {
+            filter_on_host[i + mean_len * j] *= scale_on_host[i];
           }
+        }
       }
 
       if ((op_info->HasAttr("enable_int8") &&
-             op_info->GetAttr<bool>("enable_int8"))) {
-          // LOG(WARNING) << "enable_int8 is true, GYYDEBUG";
-          auto max_Y0_vector = op_info->GetAttr<std::vector<float>>("Y0_scale");
-          CHECK_EQ(max_Y0_vector.size(), mean_len)
-              << "Weight max_scale size must equal batch_norm sacle/mean "
-                 "size.";
-          for (int i = 0; i < mean_len; i++) {
-            max_Y0_vector[i] *= fabs(scale_on_host[i]);
-          }
-          matched.at("mul")->stmt()->mutable_op_info()->SetAttr<std::vector<float>>("Y0_scale", max_Y0_vector);
+           op_info->GetAttr<bool>("enable_int8"))) {
+        // LOG(WARNING) << "enable_int8 is true, GYYDEBUG";
+        auto max_Y0_vector = op_info->GetAttr<std::vector<float>>("Y0_scale");
+        CHECK_EQ(max_Y0_vector.size(), mean_len)
+            << "Weight max_scale size must equal batch_norm sacle/mean "
+               "size.";
+        for (int i = 0; i < mean_len; i++) {
+          max_Y0_vector[i] *= fabs(scale_on_host[i]);
+        }
+        matched.at("mul")
+            ->stmt()
+            ->mutable_op_info()
+            ->SetAttr<std::vector<float>>("Y0_scale", max_Y0_vector);
 
-          int8_t* filter_on_host = filter_t->mutable_data<int8_t>();
-          for (int i = 0; i < mean_len; i++) {
-            if (scale_on_host[i] < 0) {
-              for (int j = 0; j < filter_row_num; ++j) {
-                filter_on_host[i + mean_len * j] *= -1;
-              }
+        int8_t* filter_on_host = filter_t->mutable_data<int8_t>();
+        for (int i = 0; i < mean_len; i++) {
+          if (scale_on_host[i] < 0) {
+            for (int j = 0; j < filter_row_num; ++j) {
+              filter_on_host[i + mean_len * j] *= -1;
             }
           }
+        }
       }
 
       op_desc.SetInput("Filter", {filter_name});
-        
+
     } else {
       if (with_bias_) {
         op_desc.SetInput("Bias", {matched.at("bias")->arg()->name});
       }
       op_desc.SetInput("Filter", {matched.at("W")->arg()->name});
     }
-
 
     op_desc.SetAttr<bool>("has_bias", (with_bias_ || with_bn_));
     std::string output_name, output_node_name;

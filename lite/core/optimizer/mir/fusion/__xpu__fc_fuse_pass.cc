@@ -165,7 +165,7 @@ class XPUFcFuser : public FuseBase {
     op_desc.mutable_outputs()->clear();
     op_desc.SetType("__xpu__fc");
     op_desc.SetInput("Input", {matched.at("x")->arg()->name});
-    // op_desc.SetInput("Filter", {matched.at("W")->arg()->name});
+
     auto* op_info = matched.at("mul")->stmt()->op_info();
 
     auto filter_name = matched.at("W")->arg()->name;
@@ -190,14 +190,11 @@ class XPUFcFuser : public FuseBase {
         float* ew_bias_add_y_on_host = ew_bias_add_y_t->mutable_data<float>();
         auto ew_bias_add_y_size = ew_bias_add_y_t->numel();
 
-        if (ew_bias_add_y_size != ew_dim) {
-          LOG(WARNING) << "Elements size of `elemwise_bias` and 'mul y dim1` "
-                          "should be the same, but get size of `elemwise_bias` "
-                          "is: "
-                       << ew_bias_add_y_size
-                       << ", size of `mul y dim1` is: " << ew_dim;
-          return;
-        }
+        CHECK_EQ(ew_dim, ew_bias_add_y_size)
+            << "Elements size of `elemwise_bias` and 'mul y dim1` "
+               "should be the same, but get size of `elemwise_bias` "
+               "is: "
+            << ew_bias_add_y_size << ", size of `mul y dim1` is: " << ew_dim;
 
         for (int i = 0; i < ew_bias_add_y_size; ++i) {
           fusion_bias_ptr[i] = ew_bias_add_y_on_host[i];
@@ -257,18 +254,17 @@ class XPUFcFuser : public FuseBase {
 
       if ((op_info->HasAttr("enable_int8") &&
            op_info->GetAttr<bool>("enable_int8"))) {
-        // LOG(WARNING) << "enable_int8 is true, GYYDEBUG";
-        auto max_Y0_vector = op_info->GetAttr<std::vector<float>>("Y0_scale");
-        CHECK_EQ(max_Y0_vector.size(), mean_len)
+        auto max_y0_vector = op_info->GetAttr<std::vector<float>>("Y0_scale");
+        CHECK_EQ(max_y0_vector.size(), mean_len)
             << "Weight max_scale size must equal batch_norm sacle/mean "
                "size.";
         for (int i = 0; i < mean_len; i++) {
-          max_Y0_vector[i] *= fabs(scale_on_host[i]);
+          max_y0_vector[i] *= fabs(scale_on_host[i]);
         }
         matched.at("mul")
             ->stmt()
             ->mutable_op_info()
-            ->SetAttr<std::vector<float>>("Y0_scale", max_Y0_vector);
+            ->SetAttr<std::vector<float>>("Y0_scale", max_y0_vector);
 
         int8_t* filter_on_host = filter_t->mutable_data<int8_t>();
         for (int i = 0; i < mean_len; i++) {
@@ -306,7 +302,7 @@ class XPUFcFuser : public FuseBase {
     }
     bool per_channel = false;
     int weight_scale_size = 1;
-    // auto* op_info = matched.at("mul")->stmt()->op_info();
+
     auto mul_input_y_name = op_info->Input("Y").front();
     auto mul_y_shape = scope->FindMutableTensor(mul_input_y_name)->dims();
     CHECK_EQ(mul_y_shape.size(), 2) << "mul_y_shape.size: "

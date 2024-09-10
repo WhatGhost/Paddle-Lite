@@ -49,7 +49,7 @@ class XPUMultiEncoderSliceLinkFuser : public FuseBase {
                           })
                       ->assert_op_attr_satisfied<std::vector<int>>(
                           "ends", [](const std::vector<int>& attr) {
-                            return attr.size() == 1 && attr[0] == 1;
+                            return attr.size() == 1 && attr[0] <= 20;
                           });
     if (pre_ln_) {
       xpu_encoder->assert_op_attr<bool>("norm_before", true);
